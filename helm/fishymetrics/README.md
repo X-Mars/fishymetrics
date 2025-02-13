@@ -30,10 +30,10 @@ The following table lists the configurable parameters of the fishymetrics chart 
 | Parameter                                                   | Description                                                                                | Default                   |
 | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------- |
 | `image.repo`                                                | container image repo for fishymetrics                                                      | `"comcast/fishymetrics"`  |
-| `image.tag`                                                 | container image tag for fishymetrics                                                       | `"0.12.0"`                |
+| `image.tag`                                                 | container image tag for fishymetrics                                                       | `"0.12.1"`                |
 | `image.pullPolicy`                                          | container image pull policy                                                                | `"IfNotPresent"`          |
 | `replicas`                                                  | number of replica sets to initially deploy                                                 | `1`                       |
-| `exporter.port`                                             | exporter port to listen on                                                                 | `9533`                    |
+| `exporter.port`                                             | exporter port to listen on                                                                 | `10023`                    |
 | `log.level`                                                 | log level verbosity                                                                        | `"info"`                  |
 | `log.method`                                                | alternative method for logging in addition to stdout                                       | `""`                      |
 | `log.filePath`                                              | directory path where log files are written                                                 | `"/var/log/fishymetrics"` |
@@ -44,6 +44,7 @@ The following table lists the configurable parameters of the fishymetrics chart 
 | `bmc.username`                                              | username to use when logging into baseboard management controller                          | `""`                      |
 | `bmc.password`                                              | password to use when logging into baseboard management controller                          | `""`                      |
 | `bmc.timeout`                                               | baseboard management controller request timeout                                            | `15s`                     |
+| `bmc.insecureSkipVerify`                                    | boolean flag to enable/disable TLS verification to baseboard management controller         | `false`                   |
 | `vault.address`                                             | vault instance address to get chassis credentials from                                     | `"https://vault.com"`     |
 | `vault.roleId`                                              | vault Role ID for AppRole                                                                  | `""`                      |
 | `vault.secretId`                                            | vault Secret ID for AppRole                                                                | `""`                      |
@@ -51,7 +52,8 @@ The following table lists the configurable parameters of the fishymetrics chart 
 | `vault.kv2Path`                                             | vault path where kv2 secrets will be retreived                                             | `"path/to/secret"`        |
 | `vault.kv2UserField`                                        | vault kv2 secret field where we get the username                                           | `"user"`                  |
 | `vault.kv2PasswordField`                                    | vault kv2 secret field where we get the password                                           | `"password"`              |
-| `collectors.drives.modulesExclude`                          | drive module(s) to exclude from the scrape                                                 | `""`                      |
+| `collector.drives.modulesExclude`                           | drive module(s) to exclude from the scrape                                                 | `""`                      |
+| `collector.firmware.modulesExclude`                         | firmware module(s) to exclude from the scrape                                              | `""`                      |
 | `credentials.profiles`                                      | profile(s) with all necessary parameters to obtain BMC credential from secrets backend     | `[]`                      |
 | `vector.enabled`                                            | boolean flag to enable/disable vector log forwarding                                       | `false`                   |
 | `vector.endpoint`                                           | vector client endpoint, in most cases this is deployed to localhost                        | `"http://localhost:4444"` |

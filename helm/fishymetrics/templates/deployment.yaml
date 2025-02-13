@@ -48,12 +48,27 @@ spec:
           ports:
             - containerPort: {{ .Values.exporter.port }}
               name: exporter
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+              add: ["NET_BIND_SERVICE"]
           args:
           {{- if .Values.credentials }}
             - --credentials.profiles={{ toJson .Values.credentials }}
           {{- end }}
           {{- if .Values.collector.drives.modulesExclude }}
             - --collector.drives.modules-exclude={{ .Values.collector.drives.modulesExclude }}
+          {{- end }}
+          {{- if .Values.collector.firmware.modulesExclude }}
+            - --collector.firmware.modules-exclude={{ .Values.collector.firmware.modulesExclude }}
+          {{- end }}
+          {{- if .Values.bmc.insecureSkipVerify }}
+            - --insecure-skip-verify
           {{- end }}
           env:
             - name: BMC_USERNAME
@@ -78,11 +93,11 @@ spec:
             - name: EXPORTER_PORT
               value: {{ .Values.exporter.port | quote }}
             - name: LOG_LEVEL
-              value: {{ .Values.log.level }}
+              value: {{ .Values.log.level | quote }}
             - name: LOG_METHOD
-              value: {{ .Values.log.method }}
+              value: {{ .Values.log.method | quote }}
             - name: LOG_FILE_PATH
-              value: {{ .Values.log.filePath }}
+              value: {{ .Values.log.filePath | quote }}
             - name: LOG_FILE_MAX_SIZE
               value: {{ .Values.log.fileMaxSize | quote }}
             - name: LOG_FILE_MAX_BACKUPS
@@ -91,12 +106,12 @@ spec:
               value: {{ .Values.log.fileMaxAge | quote }}
             {{- if .Values.vector.enabled }}
             - name: VECTOR_ENDPOINT
-              value: {{ .Values.vector.endpoint }}
+              value: {{ .Values.vector.endpoint | quote }}
             {{- end }}
             - name: BMC_SCHEME
-              value: {{ .Values.bmc.scheme }}
+              value: {{ .Values.bmc.scheme | quote }}
             - name: BMC_TIMEOUT
-              value: {{ .Values.bmc.timeout }}
+              value: {{ .Values.bmc.timeout | quote }}
           resources:
 {{ toYaml .Values.resources | indent 12 }}
       {{- if .Values.vector.enabled }}

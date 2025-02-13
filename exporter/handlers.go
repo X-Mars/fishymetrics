@@ -56,7 +56,10 @@ func handle(exp *Exporter, metricType ...string) []common.Handler {
 			handlers = append(handlers, exp.exportStorageBattery)
 		} else if m == ILOSELFTEST {
 			handlers = append(handlers, exp.exportIloSelfTest)
+		} else if m == FIRMWAREINVENTORY {
+			handlers = append(handlers, exp.exportFirmwareInventoryMetrics)
 		}
+
 	}
 
 	return handlers
@@ -113,13 +116,24 @@ func (e *Exporter) exportPowerMetrics(body []byte) error {
 	for _, pv := range pm.Voltages {
 		if pv.Status.State == "Enabled" {
 			var volts float64
+			var upperThresCrit float64
 			switch pv.ReadingVolts.(type) {
 			case float64:
 				volts = pv.ReadingVolts.(float64)
 			case string:
 				volts, _ = strconv.ParseFloat(pv.ReadingVolts.(string), 32)
 			}
-			(*pow)["voltageOutput"].WithLabelValues(pv.Name, e.ChassisSerialNumber, e.Model).Set(volts)
+			switch pv.UpperThresholdCritical.(type) {
+			case float64:
+				upperThresCrit = pv.UpperThresholdCritical.(float64)
+			case string:
+				upperThresCrit, _ = strconv.ParseFloat(pv.UpperThresholdCritical.(string), 32)
+			}
+			if volts == 0 && upperThresCrit == 0 {
+				continue
+			} else {
+				(*pow)["voltageOutput"].WithLabelValues(pv.Name, e.ChassisSerialNumber, e.Model).Set(volts)
+			}
 			if pv.Status.Health == "OK" {
 				state = OK
 			} else {
@@ -133,6 +147,13 @@ func (e *Exporter) exportPowerMetrics(body []byte) error {
 	}
 
 	for _, ps := range pm.PowerSupplies {
+		// if power supply status state is present, capture the bay number
+		if ps.Oem.Hp.PowerSupplyStatus.State != "" {
+			bay = ps.Oem.Hp.BayNumber
+		} else if ps.Oem.Hpe.PowerSupplyStatus.State != "" {
+			bay = ps.Oem.Hpe.BayNumber
+		}
+
 		if ps.Status.State == "Enabled" {
 			var watts float64
 			switch ps.LastPowerOutputWatts.(type) {
@@ -140,16 +161,14 @@ func (e *Exporter) exportPowerMetrics(body []byte) error {
 				watts = ps.LastPowerOutputWatts.(float64)
 			case string:
 				watts, _ = strconv.ParseFloat(ps.LastPowerOutputWatts.(string), 32)
+			default:
+				watts = 9999
 			}
 
-			if ps.Oem.Hp.PowerSupplyStatus.State != "" {
-				bay = ps.Oem.Hp.BayNumber
-			} else if ps.Oem.Hpe.PowerSupplyStatus.State != "" {
-				bay = ps.Oem.Hpe.BayNumber
+			if watts != 9999 {
+				(*pow)["supplyOutput"].WithLabelValues(ps.Name, e.ChassisSerialNumber, e.Model, strings.TrimRight(ps.Manufacturer, " "), strings.TrimRight(ps.SerialNumber, " "), ps.FirmwareVersion, ps.PowerSupplyType, strconv.Itoa(bay), strings.TrimRight(ps.Model, " ")).Set(watts)
 			}
-
-			(*pow)["supplyOutput"].WithLabelValues(ps.Name, e.ChassisSerialNumber, e.Model, strings.TrimRight(ps.Manufacturer, " "), ps.SerialNumber, ps.FirmwareVersion, ps.PowerSupplyType, strconv.Itoa(bay), ps.Model).Set(watts)
-			if ps.Status.Health == "OK" {
+			if ps.Status.Health == "OK" || ps.Status.Health == "Ok" {
 				state = OK
 			} else if ps.Status.Health == "" {
 				state = OK
@@ -160,7 +179,9 @@ func (e *Exporter) exportPowerMetrics(body []byte) error {
 			state = BAD
 		}
 
-		(*pow)["supplyStatus"].WithLabelValues(ps.Name, e.ChassisSerialNumber, e.Model, strings.TrimRight(ps.Manufacturer, " "), ps.SerialNumber, ps.FirmwareVersion, ps.PowerSupplyType, strconv.Itoa(bay), ps.Model).Set(state)
+		if ps.Status.State != "Absent" {
+			(*pow)["supplyStatus"].WithLabelValues(ps.Name, e.ChassisSerialNumber, e.Model, strings.TrimRight(ps.Manufacturer, " "), strings.TrimRight(ps.SerialNumber, " "), ps.FirmwareVersion, ps.PowerSupplyType, strconv.Itoa(bay), strings.TrimRight(ps.Model, " ")).Set(state)
+		}
 	}
 
 	return nil
@@ -199,7 +220,11 @@ func (e *Exporter) exportThermalMetrics(body []byte) error {
 			}
 
 			if fan.FanName != "" {
-				(*therm)["fanSpeed"].WithLabelValues(fan.FanName, e.ChassisSerialNumber, e.Model).Set(float64(fan.CurrentReading))
+				if float64(fan.CurrentReading) != 0 {
+					(*therm)["fanSpeed"].WithLabelValues(fan.FanName, e.ChassisSerialNumber, e.Model).Set(float64(fan.CurrentReading))
+				} else {
+					(*therm)["fanSpeed"].WithLabelValues(fan.FanName, e.ChassisSerialNumber, e.Model).Set(fanSpeed)
+				}
 			} else {
 				(*therm)["fanSpeed"].WithLabelValues(fan.Name, e.ChassisSerialNumber, e.Model).Set(fanSpeed)
 			}
@@ -255,7 +280,9 @@ func (e *Exporter) exportPhysicalDriveMetrics(body []byte) error {
 		return fmt.Errorf("Error Unmarshalling DiskDriveMetrics - " + err.Error())
 	}
 	// Check physical drive is enabled then check status and convert string to numeric values
-	if dlphysical.Status.State == "Enabled" {
+	if dlphysical.Status.State == "Absent" {
+		return nil
+	} else if dlphysical.Status.State == "Enabled" {
 		if dlphysical.Status.Health == "OK" {
 			state = OK
 		} else {
@@ -282,7 +309,7 @@ func (e *Exporter) exportPhysicalDriveMetrics(body []byte) error {
 
 	// Physical drives need to have a unique identifier like location so as to not overwrite data
 	// physical drives can have the same ID, but belong to a different ArrayController, therefore need more than just the ID as a unique identifier.
-	(*dlphysicaldrive)["driveStatus"].WithLabelValues(dlphysical.Name, e.ChassisSerialNumber, e.Model, dlphysical.Id, loc, dlphysical.SerialNumber, strconv.Itoa(cap)).Set(state)
+	(*dlphysicaldrive)["driveStatus"].WithLabelValues(dlphysical.Name, e.ChassisSerialNumber, e.Model, dlphysical.Id, loc, strings.TrimRight(dlphysical.SerialNumber, " "), strconv.Itoa(cap)).Set(state)
 	return nil
 }
 
@@ -291,9 +318,23 @@ func (e *Exporter) exportLogicalDriveMetrics(body []byte) error {
 	var state float64
 	var dllogical oem.LogicalDriveMetrics
 	var dllogicaldrive = (*e.DeviceMetrics)["logicalDriveMetrics"]
+	var ldName string
+	var raidType string
+	var volIdentifier string
 	err := json.Unmarshal(body, &dllogical)
 	if err != nil {
 		return fmt.Errorf("Error Unmarshalling LogicalDriveMetrics - " + err.Error())
+	}
+	if dllogical.Raid == "" {
+		ldName = dllogical.DisplayName
+		raidType = dllogical.RaidType
+		if len(dllogical.Identifiers) > 0 {
+			volIdentifier = dllogical.Identifiers[0].DurableName
+		}
+	} else {
+		ldName = dllogical.LogicalDriveName
+		raidType = dllogical.Raid
+		volIdentifier = dllogical.VolumeUniqueIdentifier
 	}
 	// Check physical drive is enabled then check status and convert string to numeric values
 	if dllogical.Status.State == "Enabled" {
@@ -306,7 +347,7 @@ func (e *Exporter) exportLogicalDriveMetrics(body []byte) error {
 		state = DISABLED
 	}
 
-	(*dllogicaldrive)["raidStatus"].WithLabelValues(dllogical.Name, e.ChassisSerialNumber, e.Model, dllogical.LogicalDriveName, dllogical.VolumeUniqueIdentifier, dllogical.Raid).Set(state)
+	(*dllogicaldrive)["raidStatus"].WithLabelValues(strings.TrimRight(dllogical.Name, " "), e.ChassisSerialNumber, e.Model, strings.TrimRight(ldName, " "), volIdentifier, raidType).Set(state)
 	return nil
 }
 
@@ -321,8 +362,8 @@ func (e *Exporter) exportNVMeDriveMetrics(body []byte) error {
 	}
 
 	// Check nvme drive is enabled then check status and convert string to numeric values
-	if dlnvme.Oem.Hpe.DriveStatus.State == "Enabled" {
-		if dlnvme.Oem.Hpe.DriveStatus.Health == "OK" {
+	if dlnvme.Status.State == "Enabled" || dlnvme.Oem.Hpe.DriveStatus.State == "Enabled" {
+		if dlnvme.Status.Health == "OK" || dlnvme.Oem.Hpe.DriveStatus.Health == "OK" {
 			state = OK
 		} else {
 			state = BAD
@@ -349,7 +390,7 @@ func (e *Exporter) exportUnknownDriveMetrics(body []byte) error {
 		if err != nil {
 			return fmt.Errorf("Error Unmarshalling NVMeDriveMetrics - " + err.Error())
 		}
-	} else if protocol.Protocol != "" {
+	} else {
 		err = e.exportPhysicalDriveMetrics(body)
 		if err != nil {
 			return fmt.Errorf("Error Unmarshalling DiskDriveMetrics - " + err.Error())
@@ -374,10 +415,23 @@ func (e *Exporter) exportStorageControllerMetrics(body []byte) error {
 		if sc.Status.State == "Enabled" {
 			if sc.Status.Health == "OK" {
 				state = OK
+			} else if sc.Status.Health == "" && sc.Status.HealthRollup == "" {
+				continue
 			} else {
 				state = BAD
 			}
-			(*drv)["storageControllerStatus"].WithLabelValues(scm.Name, e.ChassisSerialNumber, e.Model, sc.FirmwareVersion, sc.Model).Set(state)
+			(*drv)["storageControllerStatus"].WithLabelValues(strings.TrimRight(scm.Name, " "), e.ChassisSerialNumber, e.Model, sc.FirmwareVersion, strings.TrimRight(sc.Model, " "), sc.Location.Location).Set(state)
+		}
+	}
+
+	if len(scm.StorageController.StorageController) == 0 {
+		if scm.Status.State == "Enabled" && scm.Status.Health != "" {
+			if scm.Status.Health == "OK" {
+				state = OK
+			} else {
+				state = BAD
+			}
+			(*drv)["storageControllerStatus"].WithLabelValues(strings.TrimRight(scm.Name, " "), e.ChassisSerialNumber, e.Model, scm.ControllerFirmware.FirmwareVersion, strings.TrimRight(scm.Model, " "), scm.Location.Location).Set(state)
 		}
 	}
 
@@ -390,18 +444,29 @@ func (e *Exporter) exportMemorySummaryMetrics(body []byte) error {
 	var state float64
 	var dlm oem.System
 	var dlMemory = (*e.DeviceMetrics)["memoryMetrics"]
+	var totalSystemMemoryGiB string
 	err := json.Unmarshal(body, &dlm)
 	if err != nil {
 		return fmt.Errorf("Error Unmarshalling MemorySummaryMetrics - " + err.Error())
 	}
 	// Check memory status and convert string to numeric values
-	if dlm.MemorySummary.Status.HealthRollup == "OK" {
+	// Ignore memory summary if status is not present
+	if dlm.MemorySummary.Status.HealthRollup == "OK" || dlm.MemorySummary.Status.Health == "OK" {
 		state = OK
+	} else if dlm.MemorySummary.Status.HealthRollup == "" {
+		return nil
 	} else {
 		state = BAD
 	}
 
-	(*dlMemory)["memoryStatus"].WithLabelValues(e.ChassisSerialNumber, e.Model, strconv.Itoa(dlm.MemorySummary.TotalSystemMemoryGiB)).Set(state)
+	switch dlm.MemorySummary.TotalSystemMemoryGiB.(type) {
+	case int:
+		totalSystemMemoryGiB = strconv.Itoa(dlm.MemorySummary.TotalSystemMemoryGiB.(int))
+	case float64:
+		totalSystemMemoryGiB = strconv.FormatFloat(dlm.MemorySummary.TotalSystemMemoryGiB.(float64), 'f', -1, 64)
+	}
+
+	(*dlMemory)["memoryStatus"].WithLabelValues(e.ChassisSerialNumber, e.Model, totalSystemMemoryGiB).Set(state)
 
 	return nil
 }
@@ -566,13 +631,46 @@ func (e *Exporter) exportProcessorMetrics(body []byte) error {
 	case int:
 		totCores = strconv.Itoa(pm.TotalCores.(int))
 	}
+
+	// Ignore metrics if processor is absent
+	if pm.Status.State == "Absent" {
+		return nil
+	}
+
 	if pm.Status.Health == "OK" {
 		state = OK
 	} else {
 		state = BAD
 	}
-	(*proc)["processorStatus"].WithLabelValues(pm.Id, e.ChassisSerialNumber, e.Model, pm.Socket, pm.Model, totCores).Set(state)
+	(*proc)["processorStatus"].WithLabelValues(pm.Id, e.ChassisSerialNumber, e.Model, pm.Socket, strings.TrimRight(pm.Model, " "), totCores).Set(state)
 
+	return nil
+}
+
+// exportFirmwareInventoryMetrics collects the inventory component's firmware metrics in json format and sets the prometheus guages
+func (e *Exporter) exportFirmwareInventoryMetrics(body []byte) error {
+	var fwcomponent oem.ILO4Firmware
+	var component = (*e.DeviceMetrics)["firmwareInventoryMetrics"]
+
+	err := json.Unmarshal(body, &fwcomponent)
+	if err != nil {
+		return fmt.Errorf("Error Unmarshalling FirmwareInventoryMetrics - " + err.Error())
+	}
+	// Export for iLO4 since it has a different structure
+	if len(fwcomponent.Current.Firmware) > 0 {
+		for _, firmware := range fwcomponent.Current.Firmware {
+			(*component)["componentFirmware"].WithLabelValues(firmware.Id, strings.TrimRight(firmware.Name, " "), firmware.Location, firmware.VersionString).Set(1.0)
+		}
+	} else {
+		// Export for iLO5, since it's structure matches the GenericFirmware struct
+		var fwcomponent oem.GenericFirmware
+		err := json.Unmarshal(body, &fwcomponent)
+		if err != nil {
+			return fmt.Errorf("Error Unmarshalling FirmwareInventoryMetrics - " + err.Error())
+		}
+
+		(*component)["componentFirmware"].WithLabelValues(fwcomponent.Id, strings.TrimRight(fwcomponent.Name, " "), fwcomponent.Description, fwcomponent.Version).Set(1.0)
+	}
 	return nil
 }
 

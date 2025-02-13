@@ -40,7 +40,7 @@ func getMemberUrls(url, host string, client *retryablehttp.Client) ([]string, er
 	if err != nil {
 		return urls, err
 	}
-	defer resp.Body.Close()
+	defer common.EmptyAndCloseBody(resp)
 	if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 		if resp.StatusCode == http.StatusUnauthorized {
 			return urls, common.ErrInvalidCredential
@@ -77,7 +77,7 @@ func getSystemEndpoints(chassisUrls []string, host string, client *retryablehttp
 		if err != nil {
 			return sysEnd, err
 		}
-		defer resp.Body.Close()
+		defer common.EmptyAndCloseBody(resp)
 		if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 			if resp.StatusCode == http.StatusUnauthorized {
 				return sysEnd, common.ErrInvalidCredential
@@ -111,31 +111,50 @@ func getSystemEndpoints(chassisUrls []string, host string, client *retryablehttp
 			}
 		}
 
-		for _, power := range chas.Links.Power.LinksURLSlice {
-			url := appendSlash(power)
+		if chas.PowerAlt.URL != "" {
+			url := appendSlash(chas.PowerAlt.URL)
 			if checkUnique(sysEnd.power, url) {
 				sysEnd.power = append(sysEnd.power, url)
 			}
 		}
 
-		for _, power := range chas.LinksLower.Power.LinksURLSlice {
-			url := appendSlash(power)
-			if checkUnique(sysEnd.power, url) {
-				sysEnd.power = append(sysEnd.power, url)
-			}
-		}
-
-		for _, thermal := range chas.Links.Thermal.LinksURLSlice {
-			url := appendSlash(thermal)
+		if chas.ThermalAlt.URL != "" {
+			url := appendSlash(chas.ThermalAlt.URL)
 			if checkUnique(sysEnd.thermal, url) {
 				sysEnd.thermal = append(sysEnd.thermal, url)
 			}
 		}
 
-		for _, thermal := range chas.LinksLower.Thermal.LinksURLSlice {
-			url := appendSlash(thermal)
-			if checkUnique(sysEnd.thermal, url) {
-				sysEnd.thermal = append(sysEnd.thermal, url)
+		// if power and thermal endpoints are not found in main level, check the nested results in Links/links
+		if len(sysEnd.power) == 0 {
+			for _, power := range chas.Links.Power.LinksURLSlice {
+				url := appendSlash(power)
+				if checkUnique(sysEnd.power, url) {
+					sysEnd.power = append(sysEnd.power, url)
+				}
+			}
+
+			for _, power := range chas.LinksLower.Power.LinksURLSlice {
+				url := appendSlash(power)
+				if checkUnique(sysEnd.power, url) {
+					sysEnd.power = append(sysEnd.power, url)
+				}
+			}
+		}
+
+		if len(sysEnd.thermal) == 0 {
+			for _, thermal := range chas.Links.Thermal.LinksURLSlice {
+				url := appendSlash(thermal)
+				if checkUnique(sysEnd.thermal, url) {
+					sysEnd.thermal = append(sysEnd.thermal, url)
+				}
+			}
+
+			for _, thermal := range chas.LinksLower.Thermal.LinksURLSlice {
+				url := appendSlash(thermal)
+				if checkUnique(sysEnd.thermal, url) {
+					sysEnd.thermal = append(sysEnd.thermal, url)
+				}
 			}
 		}
 
@@ -188,15 +207,6 @@ func getSystemEndpoints(chassisUrls []string, host string, client *retryablehttp
 		}
 	}
 
-	// check last resort places for power and thermal endpoints if none were found
-	if len(sysEnd.power) == 0 && chas.PowerAlt.URL != "" {
-		sysEnd.power = append(sysEnd.power, appendSlash(chas.PowerAlt.URL))
-	}
-
-	if len(sysEnd.thermal) == 0 && chas.ThermalAlt.URL != "" {
-		sysEnd.thermal = append(sysEnd.thermal, appendSlash(chas.ThermalAlt.URL))
-	}
-
 	return sysEnd, nil
 }
 
@@ -208,7 +218,7 @@ func getSystemsMetadata(url, host string, client *retryablehttp.Client) (oem.Sys
 	if err != nil {
 		return sys, err
 	}
-	defer resp.Body.Close()
+	defer common.EmptyAndCloseBody(resp)
 	if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 		return sys, fmt.Errorf("HTTP status %d", resp.StatusCode)
 	}
@@ -237,12 +247,16 @@ func getDIMMEndpoints(url, host string, client *retryablehttp.Client) (oem.Colle
 	if err != nil {
 		return dimms, err
 	}
-	defer resp.Body.Close()
+	defer common.EmptyAndCloseBody(resp)
 	if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 		if resp.StatusCode == http.StatusNotFound {
-			for retryCount < 1 && resp.StatusCode == http.StatusNotFound {
+			for retryCount < 3 && resp.StatusCode == http.StatusNotFound {
 				time.Sleep(client.RetryWaitMin)
 				resp, err = common.DoRequest(client, req)
+				if err != nil {
+					return dimms, err
+				}
+				defer common.EmptyAndCloseBody(resp)
 				retryCount = retryCount + 1
 			}
 			if err != nil {
@@ -281,12 +295,16 @@ func getDriveEndpoint(url, host string, client *retryablehttp.Client) (oem.Gener
 	if err != nil {
 		return drive, err
 	}
-	defer resp.Body.Close()
+	defer common.EmptyAndCloseBody(resp)
 	if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 		if resp.StatusCode == http.StatusNotFound {
 			for retryCount < 3 && resp.StatusCode == http.StatusNotFound {
 				time.Sleep(client.RetryWaitMin)
 				resp, err = common.DoRequest(client, req)
+				if err != nil {
+					return drive, err
+				}
+				defer common.EmptyAndCloseBody(resp)
 				retryCount = retryCount + 1
 			}
 			if err != nil {
@@ -314,7 +332,7 @@ func getDriveEndpoint(url, host string, client *retryablehttp.Client) (oem.Gener
 	return drive, nil
 }
 
-func getAllDriveEndpoints(ctx context.Context, fqdn, initialUrl, host string, client *retryablehttp.Client) (DriveEndpoints, error) {
+func getAllDriveEndpoints(ctx context.Context, fqdn, initialUrl, host string, client *retryablehttp.Client, excludes Excludes) (DriveEndpoints, error) {
 	var driveEndpoints DriveEndpoints
 
 	// Get initial JSON return of /redfish/v1/Systems/XXXX/SmartStorage/ArrayControllers/ set to output
@@ -334,6 +352,58 @@ func getAllDriveEndpoints(ctx context.Context, fqdn, initialUrl, host string, cl
 			return driveEndpoints, err
 		}
 
+		// This if condition is for servers with iLO6. Gather metrics only from controllers with drives
+		// /redfish/v1/Systems/XXXX/Storage/XXXXX/
+		if len(arrayCtrlResp.StorageDrives) > 0 {
+			for _, member := range arrayCtrlResp.StorageDrives {
+				if reg, ok := excludes["drive"]; ok {
+					if !reg.(*regexp.Regexp).MatchString(member.URL) {
+						if checkUnique(driveEndpoints.physicalDriveURLs, member.URL) {
+							driveEndpoints.physicalDriveURLs = append(driveEndpoints.physicalDriveURLs, appendSlash(member.URL))
+						}
+					}
+				}
+			}
+
+			// If Volumes are present, parse volumes endpoint until all urls are found
+			if len(arrayCtrlResp.Volumes.LinksURLSlice) > 0 {
+				for _, volume := range arrayCtrlResp.Volumes.LinksURLSlice {
+					url := appendSlash(volume)
+					volumeOutput, err := getDriveEndpoint(fqdn+url, host, client)
+					if err != nil {
+						log.Error("api call "+fqdn+url+" failed", zap.Error(err), zap.Any("trace_id", ctx.Value("traceID")))
+						return driveEndpoints, err
+					}
+
+					for _, member := range volumeOutput.Members {
+						if reg, ok := excludes["drive"]; ok {
+							if !reg.(*regexp.Regexp).MatchString(member.URL) {
+								if checkUnique(driveEndpoints.logicalDriveURLs, member.URL) {
+									driveEndpoints.logicalDriveURLs = append(driveEndpoints.logicalDriveURLs, appendSlash(member.URL))
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if arrayCtrlResp.Controllers.URL != "" {
+				controllerOutput, err := getDriveEndpoint(fqdn+arrayCtrlResp.Controllers.URL, host, client)
+				if err != nil {
+					log.Error("api call "+fqdn+arrayCtrlResp.Controllers.URL+" failed", zap.Error(err), zap.Any("trace_id", ctx.Value("traceID")))
+					return driveEndpoints, err
+				}
+
+				for _, member := range controllerOutput.Members {
+					driveEndpoints.arrayControllerURLs = append(driveEndpoints.arrayControllerURLs, appendSlash(member.URL))
+				}
+			}
+		} else if arrayCtrlResp.LinksUpper.PhysicalDrives.URL != "" || arrayCtrlResp.LinksLower.PhysicalDrives.URL != "" {
+			// /redfish/v1/Systems/XXXX/SmartStorage/ArrayControllers/X/
+			driveEndpoints.arrayControllerURLs = append(driveEndpoints.arrayControllerURLs, appendSlash(member.URL))
+		}
+
+		// all other servers apart from iLO6
 		// If LogicalDrives is present, parse logical drive endpoint until all urls are found
 		if arrayCtrlResp.LinksUpper.LogicalDrives.URL != "" {
 			logicalDriveOutput, err := getDriveEndpoint(fqdn+arrayCtrlResp.LinksUpper.LogicalDrives.URL, host, client)
@@ -405,12 +475,16 @@ func getProcessorEndpoints(url, host string, client *retryablehttp.Client) (oem.
 	if err != nil {
 		return processors, err
 	}
-	defer resp.Body.Close()
+	defer common.EmptyAndCloseBody(resp)
 	if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 		if resp.StatusCode == http.StatusNotFound {
 			for retryCount < 3 && resp.StatusCode == http.StatusNotFound {
 				time.Sleep(client.RetryWaitMin)
 				resp, err = common.DoRequest(client, req)
+				if err != nil {
+					return processors, err
+				}
+				defer common.EmptyAndCloseBody(resp)
 				retryCount = retryCount + 1
 			}
 			if err != nil {
@@ -453,4 +527,49 @@ func checkUnique(s []string, str string) bool {
 		}
 	}
 	return true
+}
+
+// GetFirstNonEmptyURL returns the first non-empty URL from the provided list.
+func GetFirstNonEmptyURL(urls ...string) string {
+	for _, url := range urls {
+		if url != "" {
+			return url
+		}
+	}
+	return ""
+}
+
+// GetMemoryURL assigns the appropriate URL to the Memory field.
+func GetMemoryURL(sysResp oem.System) string {
+	return GetFirstNonEmptyURL(
+		sysResp.Memory.URL,
+		sysResp.Oem.Hpe.Links.Memory.URL,
+		sysResp.Oem.Hp.Links.Memory.URL,
+		sysResp.Oem.Hpe.LinksLower.Memory.URL,
+		sysResp.Oem.Hp.LinksLower.Memory.URL,
+	)
+}
+
+// GetSmartStorageURL assigns the appropriate URL to the SmartStorage field.
+func GetSmartStorageURL(sysResp oem.System) string {
+	ss := GetFirstNonEmptyURL(
+		sysResp.Oem.Hpe.Links.SmartStorage.URL,
+		sysResp.Oem.Hp.Links.SmartStorage.URL,
+		sysResp.Oem.Hpe.LinksLower.SmartStorage.URL,
+		sysResp.Oem.Hp.LinksLower.SmartStorage.URL,
+	)
+	if ss != "" {
+		ss = appendSlash(ss) + "ArrayControllers/"
+	}
+	return ss
+}
+
+// GetFirmwareInventoryURL assigns the appropriate URL to the FirmwareInventory field.
+func GetFirmwareInventoryURL(sysResp oem.System) string {
+	return GetFirstNonEmptyURL(
+		sysResp.Oem.Hpe.Links.FirmwareInventory.URL,
+		sysResp.Oem.Hp.Links.FirmwareInventory.URL,
+		sysResp.Oem.Hpe.LinksLower.FirmwareInventory.URL,
+		sysResp.Oem.Hp.LinksLower.FirmwareInventory.URL,
+	)
 }

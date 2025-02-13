@@ -97,7 +97,7 @@ func NewExporter(ctx context.Context, target, uri, profile string) (*Exporter, e
 		IdleConnTimeout:       90 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: config.GetConfig().SSLVerify,
 		},
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
@@ -206,12 +206,16 @@ func fetch(uri, device, metricType, host, profile string, client *retryablehttp.
 		if err != nil {
 			return nil, device, metricType, err
 		}
-		defer resp.Body.Close()
+		defer common.EmptyAndCloseBody(resp)
 		if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 			if resp.StatusCode == http.StatusNotFound {
 				for retryCount < 3 && resp.StatusCode == http.StatusNotFound {
 					time.Sleep(client.RetryWaitMin)
 					resp, err = common.DoRequest(client, req)
+					if err != nil {
+						return nil, device, metricType, err
+					}
+					defer common.EmptyAndCloseBody(resp)
 					retryCount = retryCount + 1
 				}
 				if err != nil {
@@ -236,6 +240,7 @@ func fetch(uri, device, metricType, host, profile string, client *retryablehttp.
 
 				time.Sleep(client.RetryWaitMin)
 				resp, err = common.DoRequest(client, req)
+				defer common.EmptyAndCloseBody(resp)
 				if err != nil {
 					return nil, device, metricType, fmt.Errorf("HTTP status %d", resp.StatusCode)
 				}
@@ -270,7 +275,7 @@ func (e *Exporter) scrape() {
 				common.IgnoredDevices[e.host] = common.IgnoredDevice{
 					Name:              e.host,
 					Endpoint:          "https://" + e.host + "/rest/v1/chassis/1",
-					Module:            MOONSHOT,
+					Model:             MOONSHOT,
 					CredentialProfile: e.credProfile,
 				}
 				log.Info("added host "+e.host+" to ignored list", zap.Any("trace_id", e.ctx.Value("traceID")))

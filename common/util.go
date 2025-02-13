@@ -50,12 +50,16 @@ func Fetch(uri, host, profile string, client *retryablehttp.Client) func() ([]by
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer EmptyAndCloseBody(resp)
 		if !(resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices) {
 			if resp.StatusCode == http.StatusNotFound {
 				for retryCount < 3 && resp.StatusCode == http.StatusNotFound {
 					time.Sleep(client.RetryWaitMin)
 					resp, err = DoRequest(client, req)
+					if err != nil {
+						return nil, err
+					}
+					defer EmptyAndCloseBody(resp)
 					retryCount = retryCount + 1
 				}
 				if err != nil {
@@ -83,6 +87,7 @@ func Fetch(uri, host, profile string, client *retryablehttp.Client) func() ([]by
 				if err != nil {
 					return nil, fmt.Errorf("Retry DoRequest failed - " + err.Error())
 				}
+				defer EmptyAndCloseBody(resp)
 				if resp.StatusCode == http.StatusUnauthorized {
 					return nil, ErrInvalidCredential
 				}
@@ -96,6 +101,15 @@ func Fetch(uri, host, profile string, client *retryablehttp.Client) func() ([]by
 			return nil, fmt.Errorf("Error reading Response Body - " + err.Error())
 		}
 		return body, err
+	}
+}
+
+// This is required to have a proper cleanup of the response body
+// to have correctly working keep-alive connections
+func EmptyAndCloseBody(resp *http.Response) {
+	if resp.Body != nil {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
 	}
 }
 
@@ -114,6 +128,8 @@ func BuildRequest(uri, host string) *retryablehttp.Request {
 
 	req, _ := retryablehttp.NewRequest(http.MethodGet, uri, nil)
 	req.SetBasicAuth(user, password)
+	// this header is required by iDRAC9 with FW ver. 3.xx and 4.xx
+	req.Header.Add("Accept", "application/json")
 
 	return req
 }

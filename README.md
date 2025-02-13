@@ -9,7 +9,7 @@ This app can support any chassis that has the redfish API available. If one need
 
 To run it:
 
-```
+```console
 $ ./fishymetrics --help
 usage: fishymetrics [<flags>]
 
@@ -21,6 +21,7 @@ Flags:
       --password=""             BMC static password
       --timeout=15s             BMC scrape timeout
       --scheme="https"          BMC Scheme to use
+      --insecure-skip-verify     Skip TLS verification
       --log.level=[debug|info|warn|error]
                                 log level verbosity
       --log.method=[file|vector]
@@ -32,13 +33,15 @@ Flags:
       --log.file-max-age="1"      max file age in days before they are rotated if log-method is file
       --vector.endpoint="http://0.0.0.0:4444"
                                 vector endpoint to send structured json logs to
-      --port="9533"             exporter port
+      --port="10023"             exporter port
       --vault.addr="https://vault.com"
                                 Vault instance address to get chassis credentials from
       --vault.role-id=""        Vault Role ID for AppRole
       --vault.secret-id=""      Vault Secret ID for AppRole
       --collector.drives.modules-exclude=""
                                 regex of drive module(s) to exclude from the scrape
+      --collector.firmware.modules-exclude=""
+                                regex of firmware module to exclude from the scrape
       --credentials.profiles=CREDENTIALS.PROFILES
                                 profile(s) with all necessary parameters to obtain BMC credential from secrets backend, i.e.
 
@@ -62,7 +65,7 @@ BMC_USERNAME=<string>
 BMC_PASSWORD=<string>
 BMC_TIMEOUT=<duration> (Default: 15s)
 BMC_SCHEME=<string> (Default: https)
-EXPORTER_PORT=<int> (Default: 9533)
+EXPORTER_PORT=<int> (Default: 10023)
 LOG_PATH=<string> (Default: /var/log/fishymetrics)
 VAULT_ADDRESS=<string>
 VAULT_ROLE_ID=<string>
@@ -77,7 +80,7 @@ VAULT_SECRET_ID=<string>
 
 ### Exclude flags
 
-Since some hosts can contain many dozens of drives, this can cause a scrape to take a very long time and may not be entirely necessary. Because of this we've included an exclude flag specifically for the `drives.module` scope.
+Since some hosts can contain many dozens of drives, this can cause a scrape to take a very long time and may not be entirely necessary. Because of this we've included an exclude flag specifically for the `drives.module` and `firmware.module` scopes.
 
 Example:
 
@@ -88,6 +91,7 @@ Example:
 | Collector | Scope  | Include Flag | Exclude Flag   |
 | --------- | ------ | ------------ | -------------- |
 | drives    | module | N/A          | module-exclude |
+| firmware  | module | N/A          | module-exclude |
 
 ## Usage
 
@@ -100,7 +104,7 @@ _if deployed on ones localhost_
 </aside>
 
 ```bash
-curl http://localhost:9533/info
+curl http://localhost:10023/info
 ```
 
 ### metrics URL
@@ -112,7 +116,7 @@ _if deployed on ones localhost_
 </aside>
 
 ```bash
-curl http://localhost:9533/metrics
+curl http://localhost:10023/metrics
 ```
 
 ### redfish API `/scrape`
@@ -120,19 +124,19 @@ curl http://localhost:9533/metrics
 To test a scrape of a host's redfish API, you can curl `fishymetrics`
 
 ```bash
-curl 'http://localhost:9533/scrape?model=<model-name>&target=1.2.3.4'
+curl 'http://localhost:10023/scrape?model=<model-name>&target=1.2.3.4'
 ```
 
 If you have a credential profile configured you can add the extra URL query parameter
 
 ```bash
-curl 'http://localhost:9533/scrape?model=<model-name>&target=1.2.3.4&credential_profile=<profile-name>'
+curl 'http://localhost:10023/scrape?model=<model-name>&target=1.2.3.4&credential_profile=<profile-name>'
 ```
 
 There is plugin support which is passed a comma separated list of strings
 
 ```bash
-curl 'http://localhost:9533/scrape?model=<model-name>&target=1.2.3.4&plugins=example1,example2'
+curl 'http://localhost:10023/scrape?model=<model-name>&target=1.2.3.4&plugins=example1,example2'
 ```
 
 ### Docker
@@ -182,6 +186,7 @@ scrape_configs:
           foo: bar
     metrics_path: /scrape
     scrape_interval: 5m
+    scrape_timeout: 4m  # Time limit to allow gathering metrics from multiple hardware components
     params:
       model: ["dl360"]
     relabel_configs:
@@ -205,13 +210,13 @@ make build
 
 #### docker image
 
-```
+```bash
 make docker
 ```
 
 ### Testing
 
-```
+```bash
 make test
 ```
 
